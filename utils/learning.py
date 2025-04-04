@@ -1,4 +1,5 @@
-from model.MotionAGFormer import MotionAGFormer
+#from model.MotionAGFormer import MotionAGFormer
+from model.MM_transformer import MotionAGFormer
 from torch import nn
 import torch
 

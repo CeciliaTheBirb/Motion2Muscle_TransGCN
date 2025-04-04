@@ -7,7 +7,7 @@ import torch
 import wandb
 from torch import optim
 from tqdm import tqdm
-
+from muscles.datasets.dataloader import load_data
 from loss.pose3d import loss_mpjpe, n_mpjpe, loss_velocity, loss_limb_var, loss_limb_gt, loss_angle, \
     loss_angle_velocity
 from loss.pose3d import jpe as calculate_jpe
@@ -29,6 +29,10 @@ from utils.data import Augmenter2D
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--data-file', type=str, default='/home/xuqianxu/muscles/datasets',
+                        help='Path to the dataset directory.')
+    parser.add_argument('--folder-names', type=str, nargs='+', default=["BMLmovi", "BMLrub", "KIT", "TotalCapture"],
+                        help='List of folder names in the dataset directory.')
     parser.add_argument("--config", type=str, default="configs/h36m/MotionAGFormer-base.yaml", help="Path to the config file.")
     parser.add_argument('-c', '--checkpoint', type=str, metavar='PATH',
                         help='checkpoint directory')
@@ -248,7 +252,8 @@ def train(args, opts):
     }
     train_loader = DataLoader(train_dataset, shuffle=True, **common_loader_params)
     test_loader = DataLoader(test_dataset, shuffle=False, **common_loader_params)
-
+    dataloader = load_data(args.data_file, args.folder_names, transforms=None)
+    
     datareader = DataReaderH36M(n_frames=args.n_frames, sample_stride=1,
                                 data_stride_train=args.n_frames // 3, data_stride_test=args.n_frames,
                                 dt_root='data/motion3d', dt_file=args.dt_file)  # Used for H36m evaluation
