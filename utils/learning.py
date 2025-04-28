@@ -34,7 +34,7 @@ def load_model(args):
         'relu': nn.ReLU
     }
 
-    if args.model_name == "MotionAGFormer":
+    if args.model_name == "TransGCN":
         model = MotionAGFormer(n_layers=args.n_layers,
                                dim_in=args.dim_in,
                                dim_feat=args.dim_feat,

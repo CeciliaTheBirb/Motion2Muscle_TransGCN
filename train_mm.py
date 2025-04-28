@@ -17,6 +17,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=str, default='/home/xuqianxu/muscles/datasets',
                         help='Path to the dataset directory.')
+    parser.add_argument('--model_name', type=str, default='TransGCN',
+                        help='Model name for prediction.')
     parser.add_argument('--folder_names', type=str, nargs='+',
                         default=["BMLmovi", "BMLrub", "KIT", "TotalCapture"],
                         help='List of folder names in the dataset directory.')
