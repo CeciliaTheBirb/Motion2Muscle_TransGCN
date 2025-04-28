@@ -2,7 +2,9 @@
 from model.MM_transformer import MotionAGFormer
 from torch import nn
 import torch
-
+from model.lstm import LSTM
+from model.lstm0 import LSTM0
+from model.transformer import Transformer
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -57,6 +59,23 @@ def load_model(args):
                                graph_only=args.graph_only,
                                neighbour_num=args.neighbour_num,
                                n_frames=args.n_frames)
+    elif args.model_name=='lstm':
+
+        model = LSTM(num_joints=20,)
+                    #frame_feature_dim=args.frame_feature_dim,
+                    #lstm_hidden_dim=args.lstm_hidden_dim,
+                    #lstm_layers=args.lstm_layers,
+                    #bidirectional=args.bidirectional,
+                    #fc_hidden_dim=args.fc_hidden_dim,
+                    #output_dim=args.output_dim,
+                    #dropout_rate=args.dropout_rate)
+    
+    elif args.model_name == 'lstm0':
+        model = LSTM0()
+
+    elif args.model_name == 'transformer':
+        model = Transformer()
+        
     else:
         raise Exception("Undefined model name")
 

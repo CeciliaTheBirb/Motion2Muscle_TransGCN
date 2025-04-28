@@ -1,6 +1,5 @@
 from torch import nn
 import torch
-#modified attention to attend to MASKs
 
 class Attention(nn.Module):
     """
@@ -55,25 +54,16 @@ class Attention(nn.Module):
 
     def forward_temporal(self, q, k, v, mask=None):
         B, H, T, J, C = q.shape
-        # Transpose to bring T to the appropriate dimensions
-        qt = q.transpose(2, 3)  # [B, H, J, T, C]
-        kt = k.transpose(2, 3)  # [B, H, J, T, C]
-        vt = v.transpose(2, 3)  # [B, H, J, T, C]
+        qt = q.transpose(2, 3)  
+        kt = k.transpose(2, 3) 
+        vt = v.transpose(2, 3) 
 
-        # Compute raw attention scores: [B, H, J, T, T]
         attn = (qt @ kt.transpose(-2, -1)) * self.scale
-
-        if mask is not None:
-            # Expand mask from [B, T] to [B, 1, 1, 1, T] so that it masks the key (last) dimension
-            mask_expanded = mask[:, None, None, None, :].to(attn.device)  # [B, 1, 1, 1, T]
-            # Set attention scores for padded positions to -inf so that softmax will zero them out
-            attn = attn.masked_fill(~mask_expanded, float('-inf'))
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        x = attn @ vt  # [B, H, J, T, C]
-        # Rearrange back to [B, T, J, (H * C)]
+        x = attn @ vt  
         x = x.permute(0, 3, 2, 1, 4).reshape(B, T, J, C * self.num_heads)
         return x
 

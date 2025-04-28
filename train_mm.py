@@ -6,12 +6,13 @@ import wandb
 from torch import optim
 from tqdm import tqdm
 from torch.utils.data import DataLoader
-
+import csv 
+import os
 from utils.learning import load_model, AverageMeter, decay_lr_exponentially
 from muscles.datasets.dataloader import load_data
 from utils.tools import set_random_seed, get_config, print_args, create_directory_if_not_exists, count_param_numbers
 from utils.learning import AverageMeter, decay_lr_exponentially
-
+import visual.visualize as visualize
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=str, default='/home/xuqianxu/muscles/datasets',
@@ -19,10 +20,11 @@ def parse_args():
     parser.add_argument('--folder_names', type=str, nargs='+',
                         default=["BMLmovi", "BMLrub", "KIT", "TotalCapture"],
                         help='List of folder names in the dataset directory.')
-    parser.add_argument("--config", type=str, default="/home/xuqianxu/MMTransformer/configs/h36m/M2M.yaml",
+    parser.add_argument("--config", type=str, default="/home/xuqianxu/MMTransformer/configs/M2M.yaml",
                         help="Path to the config file.")
-    parser.add_argument('-c', '--checkpoint', type=str, metavar='PATH', help='Checkpoint directory')
-    parser.add_argument('--new-checkpoint', type=str, metavar='PATH', default='checkpoint',
+    parser.add_argument('--log_dir', type=str, default='/home/xuqianxu/MMTransformer/logs',)
+    parser.add_argument('-c', '--checkpoint', default='/home/xuqianxu/MMTransformer/ckp_trans', type=str, metavar='PATH', help='Checkpoint directory')
+    parser.add_argument('--new-checkpoint', type=str, metavar='PATH', default='/home/xuqianxu/MMTransformer/ckp_trans',
                         help='New checkpoint directory')
     parser.add_argument('--checkpoint-file', type=str, help="Checkpoint file name")
     parser.add_argument('-sd', '--seed', default=0, type=int, help='Random seed')
@@ -35,43 +37,69 @@ def parse_args():
     opts = parser.parse_args()
     return opts
 
-def train_one_epoch(args, model, train_loader, optimizer, device, loss_meter):
+def train_one_epoch(args, model, train_loader, optimizer, device, loss_meter, att):
     model.train()
-    for sample in tqdm(train_loader, desc="Training"):
-        # Assume sample is a tuple: (pose, muscle, demo)
-        pose, muscle, demo, mask = sample
-        pose = pose.to(device)         # [batch, seq_len, pose_dim]
-        muscle = muscle.to(device)     # [batch, seq_len, muscle_dim]
-        demo = demo.to(device)         # [batch, demo_dim]
-        
+    pbar = tqdm(train_loader, desc="Training", dynamic_ncols=True)
+
+    for pose, muscle, demo in pbar:
+        pose = pose.to(device)     # [B, T, J, C]
+        muscle = muscle.to(device) # [B, T, D]
+        demo = demo.to(device)     # [B, 3]
+
+        # Normalize each batch (optionally per-sample too)
+        #muscle_mean = muscle.mean(dim=(1, 2), keepdim=True)  # mean over T and D
+        #muscle_std = muscle.std(dim=(1, 2), keepdim=True)
+        #muscle = (muscle - muscle_mean) / (muscle_std + 1e-6)
+
         optimizer.zero_grad()
-        # Forward pass: model expects pose sequence and demo info
-        pred = model(pose, demo, mask=mask)    # Output: (seq_len, batch, muscle_dim)
-        
-        # Compute MSE loss between predicted and ground-truth muscle activations
-        loss = torch.nn.functional.mse_loss(pred, muscle)
+
+        pred = model(pose, demo) #if att else model(pose) # Output: [B, T, D]
+        loss = torch.nn.SmoothL1Loss()(pred, muscle)
+
         loss.backward()
         optimizer.step()
-        
         loss_meter.update(loss.item(), pose.size(0))
+
+        # Show avg loss on tqdm
+        pbar.set_postfix(loss=f"{loss_meter.avg:.4f}")
+
     return loss_meter.avg
 
-def evaluate(args, model, test_loader, device):
+def evaluate(opts, model, test_loader, device, att):
     model.eval()
-    losses = AverageMeter()
+    losses_mse = AverageMeter()
+    losses_mae = AverageMeter()
+    #muscle_index_to_plot = [0]  # Index of the muscle to visualize
+    if opts.eval_only:
+        has_plotted = False
+        male, female = visualize.build_body()
     with torch.no_grad():
         for sample in tqdm(test_loader, desc="Evaluating"):
-            pose, muscle, demo = sample
+            if opts.eval_only:
+                pose, muscle, demo, sample_id = sample
+            else:
+                pose, muscle, demo = sample
+            #draw_to_batch(pose)
+            # Save GIFs to a folder
             pose = pose.to(device)
             muscle = muscle.to(device)
+            #muscle_mean = muscle.mean(dim=(1, 2), keepdim=True)  # mean over T and D
+            #muscle_std = muscle.std(dim=(1, 2), keepdim=True)
+            #muscle = (muscle - muscle_mean) / (muscle_std + 1e-6)
             demo = demo.to(device)
-            pose_seq = pose.permute(1, 0, 2)
-            pred = model(pose_seq, demo)
-            pred = pred.permute(1, 0, 2)
-            loss = torch.nn.functional.mse_loss(pred, muscle)
-            losses.update(loss.item(), pose.size(0))
-    print("Evaluation MSE Loss:", losses.avg)
-    return losses.avg
+            pred = model(pose, demo) #if att else model(pose)
+            loss_mse = torch.nn.MSELoss()(pred, muscle)
+            loss_mae = torch.nn.functional.l1_loss(pred, muscle)
+            losses_mse.update(loss_mse.item(), pose.size(0))
+            losses_mae.update(loss_mae.item(), pose.size(0))
+            if opts.eval_only and not has_plotted:
+                visualize.visualize_pose_and_muscle(sample_id, male, female, pred, muscle)
+                #visualize.visualize_pose(sample_id, male, female)
+                #visualize.visualize_muscle(pred, muscle, muscle_index_to_plot)
+                has_plotted = True
+    print("Evaluation MSE Loss:", losses_mse.avg)  
+    print("Evaluation MAE Loss:", losses_mae.avg)
+    return losses_mse.avg, losses_mae.avg
 
 def save_checkpoint(checkpoint_path, epoch, lr, optimizer, model, min_loss, wandb_id):
     torch.save({
@@ -86,7 +114,8 @@ def save_checkpoint(checkpoint_path, epoch, lr, optimizer, model, min_loss, wand
 def train(args, opts):
     #print_args(args)
     create_directory_if_not_exists(opts.new_checkpoint)
-    
+    att=True if args.model_name =='MotionAGFormer' else False
+    do_logging = True 
     common_loader_params = {
         'batch_size': args.batch_size,
         'num_workers': opts.num_cpus - 1,
@@ -95,12 +124,11 @@ def train(args, opts):
         'persistent_workers': True
     }
 
-    train_loader = load_data(opts.data_dir, opts.folder_names, mode='train')
-    test_loader = load_data(opts.data_dir, opts.folder_names, mode='test')
+    train_loader = load_data(opts, mode='train')
+    test_loader = load_data(opts, mode='test')
     
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    # Instantiate your adapted model (MotionToMuscleTransformer)
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
     model = load_model(args)
     #if torch.cuda.is_available():
         #model = torch.nn.DataParallel(model)
@@ -118,9 +146,10 @@ def train(args, opts):
     wandb_id = opts.wandb_run_id if opts.wandb_run_id is not None else (wandb.util.generate_id() if opts.use_wandb else None)
     
     # Resume from checkpoint if available
+
     if opts.checkpoint:
         checkpoint_path = os.path.join(opts.checkpoint,
-                                       opts.checkpoint_file if opts.checkpoint_file else "latest_epoch.pth")
+                                       opts.checkpoint_file if opts.checkpoint_file else "best_epoch.pth")
         if os.path.exists(checkpoint_path):
             checkpoint = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
             model.load_state_dict(checkpoint['model'], strict=True)
@@ -149,21 +178,29 @@ def train(args, opts):
                 wandb.config.update({"run_id": wandb_id})
                 wandb.config.update(args.__dict__)
     
-    checkpoint_path_latest = os.path.join(opts.new_checkpoint, 'latest_epoch.pth')
-    checkpoint_path_best = os.path.join(opts.new_checkpoint, 'best_epoch.pth')
+    checkpoint_path_latest = os.path.join(opts.new_checkpoint, f'{args.model_name}_latest_epoch.pth')
+    checkpoint_path_best = os.path.join(opts.new_checkpoint, f'{args.model_name}_best_epoch.pth')
     
     loss_meter = AverageMeter()
     for epoch in range(epoch_start, args.epochs):
         if opts.eval_only:
-            evaluate(args, model, test_loader, device)
+            evaluate(opts, model, test_loader, device, att)
             exit()
             
         print(f"[INFO] Epoch {epoch}")
-        train_loss = train_one_epoch(args, model, train_loader, optimizer, device, loss_meter)
-        eval_loss = evaluate(args, model, test_loader, device)
+        train_loss = train_one_epoch(args, model, train_loader, optimizer, device, loss_meter, att)
+        eval_loss_mse, eval_loss_mae = evaluate(opts, model, test_loader, device, att)
+        if do_logging:  # optional flag
+            log_dir = os.path.join(opts.log_dir, f'new_{args.model_name}_wo.csv')
+            log_exists = os.path.exists(log_dir)
+            with open(log_dir, "a", newline='') as f:
+                writer = csv.writer(f)
+                if not log_exists:
+                    writer.writerow(["Epoch", "Eval Loss MSE", "Eval Loss MAE"])
+                writer.writerow([epoch, eval_loss_mse, eval_loss_mae])
         
-        if eval_loss < min_loss:
-            min_loss = eval_loss
+        if eval_loss_mse < min_loss:
+            min_loss = eval_loss_mse
             save_checkpoint(checkpoint_path_best, epoch, lr, optimizer, model, min_loss, wandb_id)
         save_checkpoint(checkpoint_path_latest, epoch, lr, optimizer, model, min_loss, wandb_id)
         
@@ -171,7 +208,7 @@ def train(args, opts):
             wandb.log({
                 'lr': lr,
                 'train_loss': train_loss,
-                'eval_loss': eval_loss,
+                'eval_loss': eval_loss_mse,
             }, step=epoch + 1)
             
         lr = decay_lr_exponentially(lr, lr_decay, optimizer)

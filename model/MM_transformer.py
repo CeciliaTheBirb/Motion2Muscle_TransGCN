@@ -24,7 +24,7 @@ class AGFormerBlock(nn.Module):
                                    proj_drop=drop, mode=mode)
         elif mixer_type == 'graph':
             self.mixer = GCN(dim, dim,
-                             num_nodes=24 if mode == 'spatial' else n_frames,
+                             num_nodes=20 if mode == 'spatial' else n_frames,
                              neighbour_num=neighbour_num,
                              mode=mode,
                              use_temporal_similarity=use_temporal_similarity,
@@ -90,7 +90,7 @@ class MotionAGFormerBlock(nn.Module):
 
         # Graph branch (using graph mixer or TCN)
         if graph_only:
-            self.graph_spatial = GCN(dim_branch, dim_branch, num_nodes=17, mode='spatial')
+            self.graph_spatial = GCN(dim_branch, dim_branch, num_nodes=20, mode='spatial')
             if use_tcn:
                 self.graph_temporal = MultiScaleTCN(in_channels=dim_branch, out_channels=dim_branch)
             else:
@@ -192,7 +192,7 @@ class MotionAGFormer(nn.Module):
     """
     def __init__(self, n_layers, dim_in, dim_feat, dim_rep=512, dim_out=3, muscle_dim=402, mlp_ratio=4, act_layer=nn.GELU, attn_drop=0.,
                  drop=0., drop_path=0., use_layer_scale=True, layer_scale_init_value=1e-5, use_adaptive_fusion=True,
-                 num_heads=4, qkv_bias=False, qkv_scale=None, hierarchical=False, num_joints=24,
+                 num_heads=4, qkv_bias=False, qkv_scale=None, hierarchical=False, num_joints=20,
                  use_temporal_similarity=True, temporal_connection_len=1, use_tcn=False, graph_only=False,
                  neighbour_num=4, n_frames=243, demo_dim=3):
         """
@@ -208,13 +208,10 @@ class MotionAGFormer(nn.Module):
         """
         super().__init__()
         self.num_joints = num_joints
-        # Embed the input pose per joint.
         self.joints_embed = nn.Linear(dim_in, dim_feat)
-        # Learnable positional embedding for joints.
         self.pos_embed = nn.Parameter(torch.zeros(1, num_joints, dim_feat))
         self.norm = nn.LayerNorm(dim_feat)
 
-        # Create MotionAGFormer layers.
         self.layers = create_layers(dim=dim_feat,
                                     n_layers=n_layers,
                                     mlp_ratio=mlp_ratio,
@@ -236,15 +233,13 @@ class MotionAGFormer(nn.Module):
                                     neighbour_num=neighbour_num,
                                     n_frames=n_frames)
 
-        # Map joint features to an intermediate representation.
         self.rep_logit = nn.Sequential(OrderedDict([
             ('fc', nn.Linear(dim_feat, dim_rep)),
             ('act', nn.Tanh())
         ]))
-        # Demographic embedding: map demo info to same representation dimension.
-        self.demo_embed = nn.Linear(demo_dim, dim_rep)
-        # Final head to predict muscle activations per frame.
-        # We pool joint features over the joint dimension and then fuse with demo info.
+
+        self.demo_embed = nn.Linear(demo_dim, 128)
+
         self.head = nn.Linear(dim_rep, muscle_dim)
 
     def forward(self, x, demo=None, mask=None, return_rep=False):
@@ -256,67 +251,23 @@ class MotionAGFormer(nn.Module):
         Returns:
             Muscle activations of shape [B, T, muscle_dim]
         """
-        # x: [B, T, J, C]
-        x = self.joints_embed(x)          # [B, T, J, dim_feat]
-        x = x + self.pos_embed            # Add positional embedding (broadcasted over B and T)
-        for layer in self.layers:
-            x = layer(x, mask=mask)                  # [B, T, J, dim_feat]
-        x = self.norm(x)
-        # Pool over joints: aggregate joint features per frame.
-        x = x.mean(dim=2)                 # [B, T, dim_feat]
-        # Get the intermediate motion representation.
-        x = self.rep_logit(x)             # [B, T, dim_rep]
-        # If demographic info is provided, fuse it into the representation.
+
+        x = self.joints_embed(x)         
+        x = x + self.pos_embed            
         if demo is not None:
-            # demo: [B, demo_dim] -> embed -> [B, dim_rep]
-            demo_emb = self.demo_embed(demo)    # [B, dim_rep]
-            # Expand along the time dimension.
-            demo_emb = demo_emb.unsqueeze(1).expand(-1, x.shape[1], -1)  # [B, T, dim_rep]
-            # Fuse via element-wise addition.
+            demo_emb = self.demo_embed(demo)                    
+            demo_emb = demo_emb.unsqueeze(1).unsqueeze(2)       
+            demo_emb = demo_emb.expand(-1, x.shape[1], x.shape[2], -1) 
             x = x + demo_emb
+
+        for layer in self.layers:
+            x = layer(x, mask=mask)       
+        x = self.norm(x)
+
+        x = x.mean(dim=2)                 
+        x = self.rep_logit(x)             
         if return_rep:
             return x
-        x = self.head(x)                  # [B, T, muscle_dim]
+
+        x = self.head(x)                
         return x
-
-
-def _test():
-    #from torchprofile import profile_macs
-    import warnings
-    warnings.filterwarnings('ignore')
-    b, t, j, c = 1, 27, 52, 3  # e.g., batch=1, 27 frames, 52 joints, 3 coordinates per joint
-    random_x = torch.randn((b, t, j, c)).to('cuda')
-    # Demo information: e.g. [gender, height, weight]
-    random_demo = torch.randn((b, 3)).to('cuda')
-
-    model = MotionAGFormer(n_layers=12, dim_in=3, dim_feat=64, mlp_ratio=4, hierarchical=False,
-                           use_tcn=False, graph_only=False, num_joints=j, muscle_dim=402, n_frames=t,
-                           demo_dim=3).to('cuda')
-    model.eval()
-
-    model_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameter #: {model_params:,}")
-    #print(f"Model FLOPS #: {profile_macs(model, random_x, demo=random_demo):,}")
-
-    # Warm-up
-    for _ in range(10):
-        _ = model(random_x, demo=random_demo)
-
-    import time
-    num_iterations = 100 
-    start_time = time.time()
-    with torch.no_grad():
-        for _ in range(num_iterations):
-            _ = model(random_x, demo=random_demo)
-    end_time = time.time()
-    average_inference_time = (end_time - start_time) / num_iterations
-    fps = 1.0 / average_inference_time
-    print(f"FPS: {fps}")
-
-    out = model(random_x, demo=random_demo)
-    # Expected output shape: [B, T, muscle_dim]
-    assert out.shape == (b, t, 402), f"Output shape should be {b}x{t}x402 but it is {out.shape}"
-
-
-if __name__ == '__main__':
-    _test()
