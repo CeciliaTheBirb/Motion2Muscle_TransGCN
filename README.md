@@ -23,15 +23,15 @@ pip install -r requirements.txt
 - `muscle/`: Contains the corresponding MinT muscle activation files (.pkl) of subjects.
 4. For body mesh visualization, download [SMPL-X](https://smpl-x.is.tue.mpg.de/) body models.
 
-#### Training
+## Training
 
-Select a model name in `lstm/`, `lstm0/`, `transformer/` and `TransGCN/`. You can optionally choose to use [weight and biases](wandb.ai). Use the following command:
+Select a model name in `lstm`, `lstm0`, `transformer` and `TransGCN`. You can optionally choose to use [weight and biases](wandb.ai). Use the following command:
 
 ```text
 python train_mm.py --model_name <MODEL NAME> --use-wandb
 ```
 
-#### Inference and Visualization
+## Inference and Visualization
 Run the following command:
 ```text
 python train_mm.py --eval-only --checkpoint <PATH TO YOUR CHECKPOINT FOLDER>  --checkpoint-file <CHECKPOINT FILE NAME>
@@ -39,15 +39,15 @@ python train_mm.py --eval-only --checkpoint <PATH TO YOUR CHECKPOINT FOLDER>  --
 This should create a mp4 files within the `output` directory.
 
 
-#### Demo
+### Demo
 
 Example prediction output for selected muscle segments (Tibialis Anterior, Rectus Femoris, External Obliques):
 
 <p align="center">
-  <img src="0027_circle_walk_poses_muscle_vis.gif" width="24%" />
-  <img src="0028_jumping2_poses_muscle_vis.gif" width="24%" />
-  <img src="Subject_69_F_8_poses_muscle_vis.gif" width="24%" />
-  <img src="Subject_82_F_4_poses_muscle_vis.gif" width="24%" />
+  <img src="outputs/0027_circle_walk_poses_muscle_vis.gif" width="24%" />
+  <img src="outputs/0028_jumping2_poses_muscle_vis.gif" width="24%" />
+  <img src="outputs/Subject_69_F_8_poses_muscle_vis.gif" width="24%" />
+  <img src="outputs/Subject_82_F_4_poses_muscle_vis.gif" width="24%" />
 </p>
 
 
